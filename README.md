@@ -15,10 +15,34 @@ SnapCheck проверяет папку с кодом и находит то, ч
 
 ## Установка
 
+**Вариант 1 — одной командой через pip:**
+
 ```bash
-cd ~/midnight-bot
+pip install git+https://github.com/writestevebaker-del/snapcheck.git
+```
+
+Если система ругается на "externally managed environment" (частое на новых
+Ubuntu/Debian) — ставь через [pipx](https://pipx.pypa.io/):
+
+```bash
+sudo apt install pipx -y   # если ещё нет
+pipx install git+https://github.com/writestevebaker-del/snapcheck.git
+```
+
+**Вариант 2 — клонировать репозиторий и поставить в venv:**
+
+```bash
+git clone https://github.com/writestevebaker-del/snapcheck.git
+cd snapcheck
+python3 -m venv venv
 source venv/bin/activate
-pip install -e src/app
+pip install -e .
+```
+
+Проверить, что всё встало:
+
+```bash
+snapcheck scan .
 ```
 
 ## Быстрый старт
