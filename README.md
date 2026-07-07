@@ -108,6 +108,16 @@ snapcheck scan . --plugin ./my_plugin.py
 | Русский UI | ❌ | ❌ | ✅ |
 | Zero deps | ❌ | ❌ | ✅ |
 
+## Скилл для AI-агентов
+
+В репозитории: `.grok/skills/snapcheck/SKILL.md` — workflow для агентов перед push/PR.
+
+```bash
+/snapcheck                    # Grok slash command
+pytest tests/test_agent_skill.py -v
+.grok/skills/snapcheck/scripts/verify-workflow.sh
+```
+
 ## Тесты
 
 ```bash
