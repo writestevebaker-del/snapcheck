@@ -113,7 +113,10 @@ snapcheck scan . --plugin ./my_plugin.py
 Скилл учит агента запускать SnapCheck перед push/PR: выбирать профиль, читать JSON-отчёт,
 не коммитить при `critical > 0`, применять `fix` и `explain`.
 
-Файл: `.grok/skills/snapcheck/SKILL.md`
+Файлы скилла:
+
+- Grok: `.grok/skills/snapcheck/SKILL.md`
+- Claude Code: `.claude/skills/snapcheck/SKILL.md`
 
 ### Grok — только этот репозиторий (рекомендуется)
 
@@ -156,16 +159,54 @@ cp .grok/skills/snapcheck/SKILL.md ~/.cursor/skills/snapcheck/SKILL.md
 
 Либо положи копию в `<проект>/.cursor/skills/snapcheck/SKILL.md` — только для этого репо.
 
+### Claude Code — только этот репозиторий (рекомендуется)
+
+Скилл уже в git (`.claude/skills/snapcheck/`). Клонируй и открой проект в Claude Code:
+
+```bash
+git clone https://github.com/writestevebaker-del/snapcheck.git
+cd snapcheck
+claude
+```
+
+Claude Code подхватит скилл автоматически (папка `.claude/skills/` в корне репо).
+Изменения в `SKILL.md` применяются в текущей сессии без перезапуска.
+
+Вызов:
+
+```
+/snapcheck
+```
+
+или: «проверь проект перед push» — Claude может загрузить скилл сам.
+
+### Claude Code — для всех проектов (глобально)
+
+```bash
+mkdir -p ~/.claude/skills/snapcheck/scripts
+cp -r .claude/skills/snapcheck/* ~/.claude/skills/snapcheck/
+```
+
+После копирования `/snapcheck` доступен в любом проекте.
+
+Альтернатива — симлинк на репозиторий:
+
+```bash
+ln -s /path/to/snapcheck/.claude/skills/snapcheck ~/.claude/skills/snapcheck
+```
+
 ### Для команды
 
-`.grok/skills/` уже в репозитории — после `git pull` скилл появляется у всех.
-Личные копии в `~/.grok/skills/` в git не коммитят.
+`.grok/skills/` и `.claude/skills/` уже в репозитории — после `git pull` скилл появляется у всех.
+Личные копии в `~/.grok/skills/` и `~/.claude/skills/` в git не коммитят.
 
 ### Проверка, что скилл работает
 
 ```bash
 pytest tests/test_agent_skill.py -v
 .grok/skills/snapcheck/scripts/verify-workflow.sh
+# то же для Claude Code:
+.claude/skills/snapcheck/scripts/verify-workflow.sh
 ```
 
 Ожидаемо: 9 pytest passed, `ALL CHECKS PASSED` в shell-скрипте.
