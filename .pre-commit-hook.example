@@ -1,0 +1,3 @@
+#!/bin/bash
+# Пример pre-commit hook — положить в .git/hooks/pre-commit
+exec snapcheck scan . --fail-on-secrets --no-duplicates

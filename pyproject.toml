@@ -1,0 +1,18 @@
+[project]
+name = "snapcheck"
+version = "0.1.0"
+description = "CLI project health scanner — secrets, large files, duplicates, disk usage"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+snapcheck = "snapcheck.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

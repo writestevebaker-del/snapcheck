@@ -1,0 +1,14 @@
+# SnapCheck project config (copy to snapcheck.toml)
+
+[locale]
+language = "auto"
+
+[scan]
+large_threshold_mb = 10
+min_health_score = 70
+fail_on_critical = true
+skip_duplicates = false
+exclude = ["vendor", "fixtures"]
+
+[plugins]
+enabled = true
