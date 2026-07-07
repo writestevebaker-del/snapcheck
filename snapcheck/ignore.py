@@ -32,13 +32,14 @@ class IgnoreRules:
 
     dir_names: set[str] = field(default_factory=set)
     path_globs: list[str] = field(default_factory=list)
+    path_prefixes: list[str] = field(default_factory=list)
 
     def with_extra_dirs(self, names: set[str]) -> IgnoreRules:
-        merged = IgnoreRules(
+        return IgnoreRules(
             dir_names=self.dir_names | names,
             path_globs=list(self.path_globs),
+            path_prefixes=list(self.path_prefixes),
         )
-        return merged
 
     def should_skip_path(self, rel_path: Path) -> bool:
         parts = rel_path.parts
@@ -46,6 +47,9 @@ class IgnoreRules:
             if name in parts:
                 return True
         rel_str = rel_path.as_posix()
+        for prefix in self.path_prefixes:
+            if rel_str == prefix or rel_str.startswith(prefix + "/"):
+                return True
         name = rel_path.name
         for pattern in self.path_globs:
             if fnmatch.fnmatch(rel_str, pattern) or fnmatch.fnmatch(name, pattern):
@@ -56,18 +60,27 @@ class IgnoreRules:
 def _parse_ignore_lines(lines: list[str]) -> IgnoreRules:
     dir_names: set[str] = set()
     path_globs: list[str] = []
+    path_prefixes: list[str] = []
     for raw in lines:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         if line.endswith("/"):
-            dir_names.add(line.rstrip("/"))
+            base = line.rstrip("/")
+            if "/" in base:
+                path_prefixes.append(base)
+            else:
+                dir_names.add(base)
             continue
         if "*" in line or "/" in line:
             path_globs.append(line)
         else:
             dir_names.add(line)
-    return IgnoreRules(dir_names=dir_names, path_globs=path_globs)
+    return IgnoreRules(
+        dir_names=dir_names,
+        path_globs=path_globs,
+        path_prefixes=path_prefixes,
+    )
 
 
 def load_ignore_file(root: Path) -> IgnoreRules:
@@ -96,6 +109,7 @@ def build_ignore_rules(
     merged = IgnoreRules(
         dir_names=base_dirs | file_rules.dir_names,
         path_globs=list(file_rules.path_globs),
+        path_prefixes=list(file_rules.path_prefixes),
     )
     if extra_skip_dirs:
         merged = merged.with_extra_dirs(extra_skip_dirs)

@@ -23,6 +23,18 @@ def test_snapcheckignore_skips_custom_dir(tmp_path: Path) -> None:
     assert findings == []
 
 
+def test_nested_fixture_dir_skipped(tmp_path: Path) -> None:
+    fixtures = tmp_path / "tests" / "fixtures" / "git-repo"
+    fixtures.mkdir(parents=True)
+    (fixtures / ".env").write_text("API_KEY=not-a-real-secret\n")
+    (tmp_path / IGNORE_FILENAME).write_text("tests/fixtures/\n")
+    rules = build_ignore_rules(tmp_path)
+    from snapcheck.scanners.dangerous_files import scan_dangerous_files
+
+    hits = scan_dangerous_files(tmp_path, ignore=rules)
+    assert hits == []
+
+
 def test_cli_exclude_merged_with_ignore_file(tmp_path: Path) -> None:
     (tmp_path / "custom").mkdir()
     (tmp_path / "custom" / "x.txt").write_text(

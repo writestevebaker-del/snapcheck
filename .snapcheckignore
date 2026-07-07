@@ -1,0 +1,27 @@
+# SnapCheck — paths to skip during scan
+# https://github.com/writestevebaker-del/snapcheck
+
+# Logs (often contain env var names, not real secrets)
+logs/
+*.log
+
+# Backup copies of source files
+*_backup_*
+*backup*
+
+# Dependencies & caches
+node_modules/
+vendor/
+.venv/
+venv/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Test fixtures with fake tokens
+tests/fixtures/
+
+# Regex pattern definitions (not real secrets)
+snapcheck/scanners/secrets.py
