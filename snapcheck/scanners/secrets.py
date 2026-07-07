@@ -9,6 +9,7 @@ from pathlib import Path
 from snapcheck.custom_rules import CustomPattern, load_custom_patterns
 from snapcheck.entropy import find_high_entropy_assignments
 from snapcheck.ignore import IgnoreRules, build_ignore_rules
+from snapcheck.scanners._walk import WalkConfig, walk_files
 
 SKIP_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".gz",
@@ -43,6 +44,11 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     ),
     ("JWT Token", re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")),
+    ("PostgreSQL URI", re.compile(r"postgres(?:ql)?://[^:]+:[^@\s]+@")),
+    ("Redis URI", re.compile(r"redis(?:s)?://:[^@\s]+@|redis(?:s)?://[^:]+:[^@\s]+@")),
+    ("MongoDB URI", re.compile(r"mongodb(?:\+srv)?://[^:]+:[^@\s]+@")),
+    ("MySQL URI", re.compile(r"mysql://[^:]+:[^@\s]+@")),
+    ("AMQP URI", re.compile(r"amqp(?:s)?://[^:]+:[^@\s]+@")),
 ]
 
 _BINARY_SNIFF = re.compile(r"[\x00-\x08\x0e-\x1f]")
@@ -91,6 +97,7 @@ def scan_secrets(
     max_file_size: int = 512_000,
     ignore: IgnoreRules | None = None,
     enable_entropy: bool = True,
+    walk_config: WalkConfig | None = None,
 ) -> list[SecretFinding]:
     findings: list[SecretFinding] = []
     root = root.resolve()
@@ -104,14 +111,7 @@ def scan_secrets(
     for cp in custom:
         all_patterns.append((cp.name, cp.pattern))
 
-    for file_path in root.rglob("*"):
-        if not file_path.is_file():
-            continue
-        rel = file_path.relative_to(root)
-        if rules.should_skip_path(rel):
-            continue
-        if _skip_extension(file_path):
-            continue
+    for file_path, rel in walk_files(root, rules, config=walk_config):
         try:
             size = file_path.stat().st_size
             if size > max_file_size or size == 0:

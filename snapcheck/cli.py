@@ -18,13 +18,19 @@ from snapcheck.baseline import (
 )
 from snapcheck.compare import compare_reports, format_diff, load_report_json
 from snapcheck.custom_rules import RULES_FILENAME, list_builtin_patterns, load_custom_patterns
+from snapcheck.explain import explain_by_kind, explain_finding
+from snapcheck.fix import apply_safe_fixes
 from snapcheck.html_report import to_html
 from snapcheck.markdown_report import to_markdown
 from snapcheck.i18n import resolve_locale, set_locale, t
-from snapcheck.ignore import build_ignore_rules
+from snapcheck.ignore import IgnoreRules, build_ignore_rules
 from snapcheck.init_cmd import run_init
+from snapcheck.profiles import get_profile_rules, is_system_scan_path
 from snapcheck.report import ScanReport
 from snapcheck.sarif import to_sarif
+from snapcheck.scanners._walk import WalkConfig
+from snapcheck.scanners.config_secrets import scan_config_secrets
+from snapcheck.scanners.dangerous_files import scan_dangerous_files
 from snapcheck.scanners.git_check import scan_git_tracked
 from snapcheck.scanners.duplicates import scan_duplicates
 from snapcheck.scanners.disk_usage import scan_disk_usage
@@ -33,6 +39,7 @@ from snapcheck.scanners.secrets import scan_secrets
 from snapcheck.history import append_history, format_trend
 from snapcheck.hooks import install_pre_commit
 from snapcheck.smart_init import run_smart_init
+from snapcheck.teach import list_topics, teach_topic
 from snapcheck.validate import run_validate
 from snapcheck.plugins import load_plugins, run_plugins
 from snapcheck.plugin_init import run_init_plugins
@@ -56,24 +63,67 @@ def setup_locale(args: argparse.Namespace, root: Path | None = None) -> str:
     return set_locale(lang)
 
 
-def build_report(root: Path, args: argparse.Namespace) -> ScanReport:
-    cfg = load_config(root)
-    threshold_mb = getattr(args, "large_threshold_mb", None) or cfg.large_threshold_mb
-    min_large = threshold_mb * 1024 * 1024
-    cli_exclude = set(args.exclude) if getattr(args, "exclude", None) else set()
-    extra_skip = cli_exclude | set(cfg.extra_exclude or [])
-    no_dupes = getattr(args, "no_duplicates", False) or cfg.skip_duplicates
-    ignore_general = build_ignore_rules(root, extra_skip_dirs=extra_skip)
-    ignore_secrets = build_ignore_rules(
+def _build_ignore(
+    root: Path,
+    cfg,
+    args: argparse.Namespace,
+    profile_rules,
+    *,
+    include_secrets_defaults: bool = False,
+) -> IgnoreRules:
+    cli_exclude = set(getattr(args, "exclude", []) or [])
+    extra_skip = cli_exclude | set(cfg.extra_exclude or []) | set(profile_rules.extra_exclude_dirs)
+    rules = build_ignore_rules(
         root,
         extra_skip_dirs=extra_skip,
-        include_secrets_defaults=True,
+        include_secrets_defaults=include_secrets_defaults,
+    )
+    if profile_rules.extra_exclude_globs:
+        rules = IgnoreRules(
+            dir_names=rules.dir_names,
+            path_globs=rules.path_globs + list(profile_rules.extra_exclude_globs),
+        )
+    return rules
+
+
+def build_report(root: Path, args: argparse.Namespace) -> ScanReport:
+    cfg = load_config(root)
+    profile = getattr(args, "profile", None) or cfg.profile or "git-repo"
+    profile_rules = get_profile_rules(profile)
+
+    threshold_mb = getattr(args, "large_threshold_mb", None) or cfg.large_threshold_mb
+    min_large = threshold_mb * 1024 * 1024
+    no_dupes = getattr(args, "no_duplicates", False) or cfg.skip_duplicates or profile_rules.skip_duplicates
+    skip_disk = profile_rules.skip_disk_usage
+
+    walk_config = WalkConfig(
+        max_depth=getattr(args, "max_depth", None),
+        max_files=getattr(args, "max_files", None),
+        progress=getattr(args, "progress", False),
     )
 
+    ignore_general = _build_ignore(root, cfg, args, profile_rules)
+    ignore_secrets = _build_ignore(root, cfg, args, profile_rules, include_secrets_defaults=True)
+
     enable_entropy = not getattr(args, "no_entropy", False)
-    secrets = scan_secrets(root, ignore=ignore_secrets, enable_entropy=enable_entropy)
+    secrets = scan_secrets(
+        root,
+        ignore=ignore_secrets,
+        enable_entropy=enable_entropy,
+        walk_config=walk_config,
+    )
+    secrets.extend(
+        scan_config_secrets(root, ignore=ignore_secrets, walk_config=walk_config)
+    )
     if getattr(args, "use_baseline", True):
         secrets = filter_by_baseline(secrets, load_baseline(root))
+
+    dangerous = scan_dangerous_files(
+        root,
+        profile=profile,
+        ignore=ignore_general,
+        walk_config=walk_config,
+    )
 
     plugin_findings = None
     no_plugins = getattr(args, "no_plugins", False)
@@ -83,15 +133,19 @@ def build_report(root: Path, args: argparse.Namespace) -> ScanReport:
         if plugins:
             plugin_findings = run_plugins(root, plugins, ignore=ignore_general)
 
+    hide_noise = getattr(args, "hide_noise", False) or profile_rules.default_hide_noise
+
     return ScanReport(
         root=root,
         secrets=secrets,
-        hide_noise=getattr(args, "hide_noise", False),
+        hide_noise=hide_noise,
         large_files=scan_large_files(root, min_size_bytes=min_large, ignore=ignore_general),
-        disk_usage=scan_disk_usage(root, ignore=ignore_general),
+        disk_usage=[] if skip_disk else scan_disk_usage(root, ignore=ignore_general),
         duplicates=[] if no_dupes else scan_duplicates(root, ignore=ignore_general),
-        git_tracked=scan_git_tracked(root),
+        git_tracked=scan_git_tracked(root) if profile == "git-repo" else None,
         plugin_findings=plugin_findings,
+        dangerous_files=dangerous,
+        profile=profile,
     )
 
 
@@ -119,9 +173,19 @@ def _write_outputs(report: ScanReport, args: argparse.Namespace) -> None:
 
 
 def _print_report(report: ScanReport, args: argparse.Namespace) -> None:
+    profile_rules = get_profile_rules(report.profile)
+
+    if profile_rules.ci_output and not args.json:
+        h = report.health
+        print(t("cli.ci_line", score=h.score, critical=h.critical_count))
+        return
+
     if args.quiet:
         h = report.health
         print(t("cli.score_line", score=h.score, grade=h.grade, critical=h.critical_count))
+        if h.score_breakdown:
+            for line in h.score_breakdown.lines[:4]:
+                print(f"  {line.label}: {line.delta:+d}")
         for rec in report.recommendations[:5]:
             print(f"  [{rec.severity.value}] {rec.title}: {rec.action}")
         return
@@ -160,6 +224,15 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--no-baseline", action="store_true", help="Ignore .snapcheck-baseline.json")
     scan.add_argument("--exclude", action="append", default=[], metavar="DIR")
     scan.add_argument(
+        "--profile",
+        choices=["git-repo", "server", "ci"],
+        default=None,
+        help="Scan profile: git-repo (default), server, ci",
+    )
+    scan.add_argument("--max-depth", type=int, default=None, metavar="N")
+    scan.add_argument("--max-files", type=int, default=None, metavar="N")
+    scan.add_argument("--progress", action="store_true", help="Show scan progress on stderr")
+    scan.add_argument(
         "--plugin",
         action="append",
         default=[],
@@ -188,6 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", parents=[common], help="Scan + smart init + report (fix workflow)")
     doctor.add_argument("path", type=Path, nargs="?", default=Path("."))
     doctor.add_argument("--html", metavar="FILE", default=None)
+    doctor.add_argument("--profile", choices=["git-repo", "server", "ci"], default=None)
 
     rules = sub.add_parser("rules", parents=[common], help="List detection rules")
     rules_sub = rules.add_subparsers(dest="rules_cmd", required=True)
@@ -208,6 +282,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("path", type=Path, nargs="?", default=Path("."))
     p_init.add_argument("--force", action="store_true")
 
+    explain = sub.add_parser("explain", parents=[common], help="Explain a finding type")
+    explain.add_argument("index", type=int, nargs="?", default=None, help="Finding index from last scan")
+    explain.add_argument("--finding", metavar="KIND", help="Explain by finding kind name")
+
+    teach = sub.add_parser("teach", parents=[common], help="Offline guides and CI snippets")
+    teach.add_argument("topic", nargs="?", default=None, help="Topic: secrets, baseline, ci, profiles, ...")
+
+    fix = sub.add_parser("fix", parents=[common], help="Apply safe fixes interactively")
+    fix.add_argument("path", type=Path, nargs="?", default=Path("."))
+    fix.add_argument("--yes", action="store_true", help="Apply safe fixes without prompts")
+
     return parser
 
 
@@ -218,13 +303,18 @@ def run_scan(args: argparse.Namespace) -> int:
         return 2
 
     setup_locale(args, root)
+    if is_system_scan_path(str(root)):
+        print(t("cli.system_path_warn"), file=sys.stderr)
+
     args.use_baseline = not args.no_baseline
     t0 = time.perf_counter()
     report = build_report(root, args)
     elapsed = time.perf_counter() - t0
     report.scan_duration_seconds = round(elapsed, 3)
     _print_report(report, args)
-    if not args.json and not args.quiet:
+
+    profile_rules = get_profile_rules(report.profile)
+    if not args.json and not args.quiet and not profile_rules.ci_output:
         history = format_trend(root, report.health.score)
         append_history(
             root,
@@ -239,9 +329,9 @@ def run_scan(args: argparse.Namespace) -> int:
     _write_outputs(report, args)
 
     cfg = load_config(root)
-    if args.fail_on_critical or cfg.fail_on_critical:
-        if report.health.critical_count > 0:
-            return 1
+    fail_critical = args.fail_on_critical or cfg.fail_on_critical or profile_rules.default_fail_on_critical
+    if fail_critical and report.health.critical_count > 0:
+        return 1
     if args.fail_on_secrets and report.has_secrets:
         return 1
     min_score = args.min_score if args.min_score is not None else cfg.min_health_score
@@ -274,6 +364,13 @@ def run_baseline(args: argparse.Namespace) -> int:
             exclude=[],
             use_baseline=False,
             hide_noise=False,
+            profile=None,
+            no_entropy=False,
+            no_plugins=True,
+            plugin=[],
+            max_depth=None,
+            max_files=None,
+            progress=False,
         )
         report = build_report(root, scan_args)
         entries = {
@@ -312,6 +409,8 @@ def run_doctor(args: argparse.Namespace) -> int:
         html=args.html,
         sarif=None,
         save_report=None,
+        markdown=None,
+        save_json=None,
         large_threshold_mb=10,
         no_duplicates=False,
         fail_on_secrets=False,
@@ -319,6 +418,13 @@ def run_doctor(args: argparse.Namespace) -> int:
         no_baseline=False,
         exclude=[],
         use_baseline=True,
+        profile=getattr(args, "profile", None),
+        no_entropy=False,
+        no_plugins=False,
+        plugin=[],
+        max_depth=None,
+        max_files=None,
+        progress=False,
     )
     report = build_report(root, scan_args)
     print(report.to_text())
@@ -388,6 +494,45 @@ def main(argv: list[str] | None = None) -> int:
                 desc = f" — {plugin.description}" if plugin.description else ""
                 print(f"  {plugin.name} v{plugin.version}{desc}")
             return 0
+    if args.command == "explain":
+        setup_locale(args, None)
+        if args.finding:
+            print(explain_by_kind(args.finding))
+            return 0
+        if args.index is not None:
+            print(t("explain.need_scan"))
+            return 1
+        parser.print_help()
+        return 2
+    if args.command == "teach":
+        setup_locale(args, None)
+        if args.topic:
+            print(teach_topic(args.topic))
+            return 0
+        print(t("teach.list_header"))
+        for topic in list_topics():
+            print(f"  - {topic}")
+        return 0
+    if args.command == "fix":
+        root = args.path.resolve()
+        setup_locale(args, root)
+        scan_args = argparse.Namespace(
+            path=root,
+            hide_noise=True,
+            profile=None,
+            exclude=[],
+            no_duplicates=False,
+            no_entropy=False,
+            no_plugins=True,
+            plugin=[],
+            use_baseline=True,
+            large_threshold_mb=10,
+            max_depth=None,
+            max_files=None,
+            progress=False,
+        )
+        report = build_report(root, scan_args)
+        return apply_safe_fixes(report, yes=args.yes)
 
     parser.print_help()
     return 2

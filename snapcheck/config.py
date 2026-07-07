@@ -17,6 +17,7 @@ class ScanConfig:
     extra_exclude: list[str] | None = None
     language: str | None = None
     plugins_enabled: bool = True
+    profile: str = "git-repo"
 
 
 def _parse_toml_simple(text: str) -> dict:
@@ -76,6 +77,8 @@ def load_config(root: Path) -> ScanConfig:
     if isinstance(plugins, dict) and "enabled" in plugins:
         plugins_enabled = bool(plugins.get("enabled", True))
 
+    profile = str(scan.get("profile", "git-repo"))
+
     return ScanConfig(
         large_threshold_mb=int(scan.get("large_threshold_mb", 10)),
         min_health_score=int(scan.get("min_health_score", 0)),
@@ -84,4 +87,5 @@ def load_config(root: Path) -> ScanConfig:
         extra_exclude=exclude_list,
         language=lang_val,
         plugins_enabled=plugins_enabled,
+        profile=profile,
     )

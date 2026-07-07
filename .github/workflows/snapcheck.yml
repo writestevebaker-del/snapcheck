@@ -19,4 +19,4 @@ jobs:
         run: pip install -e .
 
       - name: Run health scan
-        run: snapcheck scan . --fail-on-critical --no-duplicates
+        run: snapcheck scan . --profile ci

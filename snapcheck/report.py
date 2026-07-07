@@ -22,6 +22,7 @@ from snapcheck.scanners.disk_usage import DirUsage
 from snapcheck.scanners.large_files import LargeFile
 from snapcheck.scanners.git_check import GitTrackedSecret
 from snapcheck.plugins.base import PluginFinding
+from snapcheck.scanners.dangerous_files import DangerousFile
 from snapcheck.scanners.secrets import SecretFinding
 
 _BOX_W = 62
@@ -38,6 +39,7 @@ _RISK_KEYS = {
     SecretRisk.REVIEW: "risk.review",
     SecretRisk.PLACEHOLDER: "risk.placeholder",
     SecretRisk.FALSE_POSITIVE: "risk.false_positive",
+    SecretRisk.EXPECTED: "risk.expected",
 }
 
 
@@ -65,6 +67,8 @@ class ScanReport:
     hide_noise: bool = False
     scan_duration_seconds: float | None = None
     plugin_findings: list[PluginFinding] | None = None
+    dangerous_files: list[DangerousFile] | None = None
+    profile: str = "git-repo"
 
     @property
     def has_secrets(self) -> bool:
@@ -75,12 +79,17 @@ class ScanReport:
         if not self.hide_noise:
             return self.secrets
         classified = build_health_summary(
-            self.secrets, self.large_files, self.duplicates, self.disk_usage, self.git_tracked
+            self.secrets,
+            self.large_files,
+            self.duplicates,
+            self.disk_usage,
+            self.git_tracked,
+            profile=self.profile,
         ).classified_secrets
         return [
             c.finding
             for c in classified
-            if c.risk != SecretRisk.FALSE_POSITIVE
+            if c.risk not in {SecretRisk.FALSE_POSITIVE, SecretRisk.EXPECTED}
         ]
 
     @property
@@ -92,6 +101,8 @@ class ScanReport:
             self.disk_usage,
             self.git_tracked,
             self.plugin_findings,
+            self.dangerous_files,
+            profile=self.profile,
         )
 
     @property
@@ -104,6 +115,8 @@ class ScanReport:
             self.disk_usage,
             self.git_tracked,
             self.plugin_findings,
+            self.dangerous_files,
+            profile=self.profile,
         )
 
     def to_dict(self) -> dict:
@@ -113,6 +126,7 @@ class ScanReport:
             "version": __version__,
             "locale": get_locale(),
             "scan_duration_seconds": self.scan_duration_seconds,
+            "profile": self.profile,
             "health": {
                 "score": health.score,
                 "grade": health.grade,
@@ -120,6 +134,18 @@ class ScanReport:
                 "warning": health.warning_count,
                 "info": health.info_count,
             },
+            "score_breakdown": (
+                {
+                    "base": health.score_breakdown.base,
+                    "total": health.score_breakdown.total,
+                    "lines": [
+                        {"label": line.label, "delta": line.delta}
+                        for line in health.score_breakdown.lines
+                    ],
+                }
+                if health.score_breakdown
+                else None
+            ),
             "summary": {
                 "secrets": len(self._visible_secrets),
                 "large_files": len(self.large_files),
@@ -138,7 +164,18 @@ class ScanReport:
                 }
                 for f in self.plugin_findings or []
             ],
-            "recommendations": [asdict(r) for r in self.recommendations],
+            "recommendations": [
+                {**asdict(r), "commands": list(r.commands)} for r in self.recommendations
+            ],
+            "dangerous_files": [
+                {
+                    "path": str(d.path),
+                    "kind": d.kind,
+                    "severity": d.severity,
+                    "reason": d.reason,
+                }
+                for d in self.dangerous_files or []
+            ],
             "secrets": [
                 {
                     **asdict(c.finding),
@@ -175,6 +212,12 @@ class ScanReport:
             lines.append(f"  {idx}. {icon} {rec.title}")
             lines.append(f"     → {rec.action}")
             lines.append(f"     ℹ {rec.reason}")
+            if rec.commands:
+                lines.append(f"     {t('report.commands')}")
+                for cmd in rec.commands:
+                    lines.append(f"       $ {cmd}")
+            if rec.docs_url:
+                lines.append(f"     {t('report.learn_more')}: {rec.docs_url}")
         return lines
 
     def _format_secrets_detail(self) -> list[str]:
@@ -192,7 +235,13 @@ class ScanReport:
             lines.append(f"  ✓ {t('report.no_secrets')}")
             return lines
 
-        for risk in (SecretRisk.CRITICAL, SecretRisk.REVIEW, SecretRisk.PLACEHOLDER, SecretRisk.FALSE_POSITIVE):
+        for risk in (
+            SecretRisk.CRITICAL,
+            SecretRisk.REVIEW,
+            SecretRisk.PLACEHOLDER,
+            SecretRisk.FALSE_POSITIVE,
+            SecretRisk.EXPECTED,
+        ):
             items = by_risk[risk]
             if not items:
                 continue
@@ -206,6 +255,21 @@ class ScanReport:
             if len(items) > len(show):
                 lines.append(f"    … {t('report.more')} {len(items) - len(show)}")
 
+        return lines
+
+    def _format_dangerous_detail(self) -> list[str]:
+        lines: list[str] = []
+        items = self.dangerous_files or []
+        lines.append("")
+        lines.append(_section(f"⚠️  {t('report.dangerous_files')} ({len(items)})"))
+        if not items:
+            lines.append(f"  ✓ {t('report.no_dangerous')}")
+            return lines
+        for item in items[:10]:
+            lines.append(f"  [{item.severity.upper()}] {item.path} — {item.kind}")
+            lines.append(f"      {item.reason}")
+        if len(items) > 10:
+            lines.append(f"    … {t('report.more')} {len(items) - 10}")
         return lines
 
     def _format_plugins_detail(self) -> list[str]:
@@ -262,6 +326,14 @@ class ScanReport:
             f"review={health.warning_count}  "
             f"noise={health.info_count}"
         )
+        if health.score_breakdown and health.score_breakdown.lines:
+            lines.append("")
+            lines.append(_section(f"📉 {t('report.score_breakdown')}"))
+            lines.append(f"  {t('report.score_base')}: {health.score_breakdown.base}")
+            for item in health.score_breakdown.lines:
+                lines.append(f"  {item.label}: {item.delta:+d}")
+            lines.append(f"  {'─' * 28}")
+            lines.append(f"  {t('report.score_total')}: {health.score_breakdown.total}")
 
         lines.append("")
         lines.append(_section(f"📊 {t('report.summary')}"))
@@ -291,6 +363,8 @@ class ScanReport:
             )
 
         lines.extend(self._format_secrets_detail())
+        if self.dangerous_files:
+            lines.extend(self._format_dangerous_detail())
         if self.plugin_findings is not None:
             lines.extend(self._format_plugins_detail())
 

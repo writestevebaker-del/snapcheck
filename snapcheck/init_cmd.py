@@ -8,7 +8,7 @@ from snapcheck.i18n import t
 from snapcheck.ignore import IGNORE_FILENAME
 
 DEFAULT_IGNORE_TEMPLATE = """# SnapCheck — paths to skip during scan
-# https://github.com/midnight-bot/snapcheck
+# https://github.com/writestevebaker-del/snapcheck
 
 # Logs (often contain env var names, not real secrets)
 logs/

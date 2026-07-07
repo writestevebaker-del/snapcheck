@@ -4,7 +4,24 @@ dynamic = ["version"]
 description = "CLI project health scanner — secrets, large files, duplicates, disk usage"
 readme = "README.md"
 requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "writestevebaker-del"}]
 dependencies = []
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://github.com/writestevebaker-del/snapcheck"
+Repository = "https://github.com/writestevebaker-del/snapcheck"
+Issues = "https://github.com/writestevebaker-del/snapcheck/issues"
 
 [project.scripts]
 snapcheck = "snapcheck.cli:main"

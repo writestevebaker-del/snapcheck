@@ -35,11 +35,16 @@ def to_html(report: ScanReport) -> str:
     rec_rows = ""
     for rec in report.recommendations:
         color = _SEV_COLOR[rec.severity]
+        cmd_block = ""
+        if rec.commands:
+            cmds = "<br>".join(html.escape(c) for c in rec.commands)
+            cmd_block = f"<pre><code>{cmds}</code></pre>"
         rec_rows += f"""
         <div class="rec" style="border-left:4px solid {color}">
           <strong>{html.escape(rec.title)}</strong>
           <p>{html.escape(rec.action)}</p>
           <small>{html.escape(rec.reason)}</small>
+          {cmd_block}
         </div>"""
 
     secret_rows = ""
